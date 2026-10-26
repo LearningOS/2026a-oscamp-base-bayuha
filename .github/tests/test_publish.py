@@ -73,7 +73,7 @@ class PublishTests(unittest.TestCase):
         self.upload.assert_not_called()
 
     def test_acknowledgement_is_persisted_only_after_upload(self):
-        self.upload.side_effect = lambda *args: self.assertEqual(self.writes[-1]["upload"]["status"], "pending")
+        self.upload.side_effect = lambda *args: self.assertEqual(self.writes[-1]["upload"]["status"], "pending") or True
         publish.main()
         self.assertEqual([s["upload"]["status"] for s in self.writes], ["pending", "accepted"])
         self.assertEqual(self.writes[-1]["runAttempt"], "2")
@@ -87,6 +87,12 @@ class PublishTests(unittest.TestCase):
         self.assertEqual(self.writes[0]["score"], 0)
         self.assertEqual(self.writes[0]["upload"]["status"], "pending")
 
+    def test_unbound_opencamp_account_keeps_pending_without_error(self):
+        self.upload.return_value = False
+        publish.main()
+        self.assertEqual(len(self.writes), 1)
+        self.assertEqual(self.writes[0]["upload"]["status"], "pending")
+
     def test_invalid_result_shapes_are_rejected(self):
         for data in [[], None, dict(self.result, schema=True), dict(self.result, exercises=[None] * len(course.COURSE['tests']))]:
             with self.assertRaises(ValueError):
@@ -94,6 +100,10 @@ class PublishTests(unittest.TestCase):
 
 
 class UploadResponseTests(unittest.TestCase):
+    def test_unbound_user_response_is_non_fatal(self):
+        with patch.object(publish, "urlopen", return_value=io.BytesIO(b'{"result":400,"msg":"user is not exist"}')):
+            self.assertFalse(publish.upload_score({}, "placeholder-only"))
+
     def test_boolean_result_is_not_an_api_acknowledgement(self):
         with patch.object(publish, "urlopen", return_value=io.BytesIO(b'{"result":true}')):
             with self.assertRaisesRegex(RuntimeError, "rejected"):

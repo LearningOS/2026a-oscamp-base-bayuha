@@ -36,9 +36,14 @@ def upload_score(payload, token):
         result = json.loads(body)
     except json.JSONDecodeError:
         raise RuntimeError(f"OpenCamp returned invalid JSON: {body.replace(token, '[REDACTED]')}") from None
+    if (isinstance(result, dict) and result.get("result") == 400
+            and str(result.get("msg", "")).strip().lower() == "user is not exist"):
+        print("OpenCamp does not recognize this GitHub account yet. Kept measured score as pending.", flush=True)
+        return False
     if not isinstance(result, dict) or type(result.get("result")) is not int or result["result"] != 1:
         raise RuntimeError(f"OpenCamp rejected the score: {body.replace(token, '[REDACTED]')}")
     print("OpenCamp accepted the score (result=1).")
+    return True
 
 
 
@@ -115,7 +120,13 @@ def main():
           f"score={score}/{COURSE['totalScore']}", flush=True)
     if not current_commit():
         return
-    upload_score(payload, token)
+    accepted = upload_score(payload, token)
+    if not accepted:
+        if os.environ.get("GITHUB_STEP_SUMMARY"):
+            with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as summary:
+                summary.write("OpenCamp has not linked this GitHub account yet. "
+                              "Measured score is saved, upload remains pending.\n")
+        return
     result["upload"]["status"] = "accepted"
     save_state(rank, state_path, result, f"Confirm OpenCamp {COURSE['courseId']} upload accepted")
     if os.environ.get("GITHUB_STEP_SUMMARY"):
