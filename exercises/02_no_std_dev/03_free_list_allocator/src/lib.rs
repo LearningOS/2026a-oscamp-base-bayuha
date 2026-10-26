@@ -119,7 +119,43 @@ unsafe impl GlobalAlloc for FreeListAllocator {
         // TODO: Step 2 — no suitable block in free_list, allocate from bump region
         //
         // Same logic as 02_bump_allocator's alloc
-        todo!()
+        let mut previous: *mut FreeBlock = null_mut();
+        let mut current = self.free_list_head();
+        while !current.is_null() {
+            let block = &*current;
+            if current as usize % align == 0 && block.size >= size {
+                let next = block.next;
+                if previous.is_null() {
+                    self.set_free_list_head(next);
+                } else {
+                    (*previous).next = next;
+                }
+                return current as *mut u8;
+            }
+            previous = current;
+            current = block.next;
+        }
+
+        let mut current = self.bump_next.load(core::sync::atomic::Ordering::SeqCst);
+        loop {
+            let aligned = match current.checked_add(align - 1) {
+                Some(value) => value & !(align - 1),
+                None => return null_mut(),
+            };
+            let end = match aligned.checked_add(size) {
+                Some(value) if value <= self.heap_end => value,
+                _ => return null_mut(),
+            };
+            match self.bump_next.compare_exchange(
+                current,
+                end,
+                core::sync::atomic::Ordering::SeqCst,
+                core::sync::atomic::Ordering::SeqCst,
+            ) {
+                Ok(_) => return aligned as *mut u8,
+                Err(actual) => current = actual,
+            }
+        }
     }
 
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
@@ -131,7 +167,12 @@ unsafe impl GlobalAlloc for FreeListAllocator {
         // 1. Cast ptr to *mut FreeBlock
         // 2. Write FreeBlock { size, next: current list head }
         // 3. Update free_list head to ptr
-        todo!()
+        let block = ptr as *mut FreeBlock;
+        block.write(FreeBlock {
+            size,
+            next: self.free_list_head(),
+        });
+        self.set_free_list_head(block);
     }
 }
 
